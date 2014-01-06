@@ -1,6 +1,43 @@
+2.17.2
+-----------
+
+- Fix race condition in bulk requeue during shutdown [#1406]
+- Fix bug where strictly prioritized queues might be processed out of
+  order [#1408]
+
+2.17.1
+-----------
+
+- Expose `delay` extension as `sidekiq_delay` also.  This allows you to
+  run Delayed::Job and Sidekiq in the same process, selectively porting
+  `delay` calls to `sidekiq_delay`.  You just need to ensure that
+  Sidekiq is required **before** Delayed::Job in your Gemfile. [#1393]
+- Bump redis client required version to 3.0.6
+- Minor CSS fixes for Web UI
+
+2.17.0
+-----------
+
+- Change `Sidekiq::Client#push_bulk` to return an array of pushed `jid`s. [#1315, barelyknown]
+- Web UI refactoring to use more API internally (yummy dogfood!)
+- Much faster Sidekiq::Job#delete performance for larger queue sizes
+- Further capistrano 3 fixes
+- Many misc minor fixes
+
+2.16.1
+-----------
+
+- Revert usage of `resolv-replace`.  MRI's native DNS lookup releases the GIL.
+- Fix several Capistrano 3 issues
+- Escaping dynamic data like job args and error messages in Sidekiq Web UI. [#1299, lian]
+
 2.16.0
 -----------
 
+- Deprecate `Sidekiq::Client.registered_workers` and `Sidekiq::Client.registered_queues`
+- Refactor Sidekiq::Client to be instance-based [#1279]
+- Pass all Redis options to the Redis driver so Unix sockets
+  can be fully configured. [#1270, salimane]
 - Allow sidekiq-web extensions to add locale paths so extensions
   can be localized. [#1261, ondrejbartas]
 - Capistrano 3 support [#1254, phallstrom]

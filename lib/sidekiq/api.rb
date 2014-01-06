@@ -10,10 +10,12 @@ module Sidekiq
       Sidekiq.redis { |conn| conn.get("stat:failed") }.to_i
     end
 
-    def reset
+    def reset(*stats)
+      all   = %w(failed processed)
+      stats = stats.empty? ? all : all & stats.flatten.compact.map(&:to_s)
+
       Sidekiq.redis do |conn|
-        conn.set("stat:failed", 0)
-        conn.set("stat:processed", 0)
+        stats.each { |stat| conn.set("stat:#{stat}", 0) }
       end
     end
 
@@ -195,7 +197,7 @@ module Sidekiq
     # Remove this job from the queue.
     def delete
       count = Sidekiq.redis do |conn|
-        conn.lrem("queue:#{@queue}", 0, @value)
+        conn.lrem("queue:#{@queue}", 1, @value)
       end
       count != 0
     end
@@ -257,6 +259,7 @@ module Sidekiq
 
     def initialize(name)
       @zset = name
+      @_size = size
     end
 
     def size
@@ -270,14 +273,14 @@ module Sidekiq
     end
 
     def each(&block)
-      initial_size = size
-      deleted_size = 0
+      initial_size = @_size
+      offset_size = 0
       page = -1
       page_size = 50
 
       loop do
-        range_start = page * page_size + deleted_size
-        range_end   = page * page_size + deleted_size + (page_size - 1)
+        range_start = page * page_size + offset_size
+        range_end   = page * page_size + offset_size + (page_size - 1)
         elements = Sidekiq.redis do |conn|
           conn.zrange @zset, range_start, range_end, :with_scores => true
         end
@@ -286,7 +289,7 @@ module Sidekiq
         elements.each do |element, score|
           block.call SortedEntry.new(self, score, element)
         end
-        deleted_size = initial_size - size
+        offset_size = initial_size - @_size
       end
     end
 
@@ -320,13 +323,21 @@ module Sidekiq
           message = Sidekiq.load_json(element)
 
           if message["jid"] == jid
-            Sidekiq.redis { |conn| conn.zrem(@zset, element) }
+            _, @_size = Sidekiq.redis do |conn|
+              conn.multi do
+                conn.zrem(@zset, element)
+                conn.zcard @zset
+              end
+            end
           end
         end
         elements_with_jid.count != 0
       else
-        count = Sidekiq.redis do |conn|
-          conn.zremrangebyscore(@zset, score, score)
+        count, @_size = Sidekiq.redis do |conn|
+          conn.multi do
+            conn.zremrangebyscore(@zset, score, score)
+            conn.zcard @zset
+          end
         end
         count != 0
       end

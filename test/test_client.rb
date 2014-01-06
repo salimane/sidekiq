@@ -46,7 +46,30 @@ class TestClient < Sidekiq::Test
       assert_raises ArgumentError do
         Sidekiq::Client.push('queue' => 'foo', 'class' => MyWorker, 'args' => 1)
       end
+    end
 
+    describe 'as instance' do
+      it 'can push' do
+        @redis.expect :lpush, 1, ['queue:default', Array]
+        client = Sidekiq::Client.new
+        jid = client.push('class' => 'Blah', 'args' => [1,2,3])
+        assert_equal 24, jid.size
+      end
+
+      it 'allows local middleware modification' do
+        @redis.expect :lpush, 1, ['queue:default', Array]
+        $called = false
+        mware = Class.new { def call(worker_klass,msg,q); $called = true; msg;end }
+        client = Sidekiq::Client.new
+        client.middleware do |chain|
+          chain.add mware
+        end
+        client.push('class' => 'Blah', 'args' => [1,2,3])
+
+        assert $called
+        assert client.middleware.exists?(mware)
+        refute Sidekiq.client_middleware.exists?(mware)
+      end
     end
 
     it 'pushes messages to redis' do
@@ -136,12 +159,7 @@ class TestClient < Sidekiq::Test
 
     it 'retrieves queues' do
       @redis.expect :smembers, ['bob'], ['queues']
-      assert_equal ['bob'], Sidekiq::Client.registered_queues
-    end
-
-    it 'retrieves workers' do
-      @redis.expect :smembers, ['bob'], ['workers']
-      assert_equal ['bob'], Sidekiq::Client.registered_workers
+      assert_equal ['bob'], Sidekiq::Queue.all.map(&:name)
     end
   end
 
@@ -150,12 +168,17 @@ class TestClient < Sidekiq::Test
       Sidekiq::Queue.new.clear
     end
     it 'can push a large set of jobs at once' do
-      count = Sidekiq::Client.push_bulk('class' => QueuedWorker, 'args' => (1..1_000).to_a.map { |x| Array(x) })
-      assert_equal 1_000, count
+      jids = Sidekiq::Client.push_bulk('class' => QueuedWorker, 'args' => (1..1_000).to_a.map { |x| Array(x) })
+      assert_equal 1_000, jids.size
     end
     it 'can push a large set of jobs at once using a String class' do
-      count = Sidekiq::Client.push_bulk('class' => 'QueuedWorker', 'args' => (1..1_000).to_a.map { |x| Array(x) })
-      assert_equal 1_000, count
+      jids = Sidekiq::Client.push_bulk('class' => 'QueuedWorker', 'args' => (1..1_000).to_a.map { |x| Array(x) })
+      assert_equal 1_000, jids.size
+    end
+    it 'returns the jids for the jobs' do
+      Sidekiq::Client.push_bulk('class' => 'QueuedWorker', 'args' => (1..2).to_a.map { |x| Array(x) }).each do |jid|
+        assert_match /[0-9a-f]{12}/, jid
+      end
     end
   end
 
@@ -185,7 +208,9 @@ class TestClient < Sidekiq::Test
       begin
         assert_equal nil, Sidekiq::Client.push('class' => MyWorker, 'args' => [0])
         assert_match /[0-9a-f]{12}/, Sidekiq::Client.push('class' => MyWorker, 'args' => [1])
-        assert_equal 1, Sidekiq::Client.push_bulk('class' => MyWorker, 'args' => [[0], [1]])
+        Sidekiq::Client.push_bulk('class' => MyWorker, 'args' => [[0], [1]]).each do |jid|
+          assert_match /[0-9a-f]{12}/, jid
+        end
       ensure
         Sidekiq.client_middleware.remove Stopper
       end
@@ -201,11 +226,11 @@ class TestClient < Sidekiq::Test
 
   describe 'item normalization' do
     it 'defaults retry to true' do
-      assert_equal true, Sidekiq::Client.send(:normalize_item, 'class' => QueuedWorker, 'args' => [])['retry']
+      assert_equal true, Sidekiq::Client.new.send(:normalize_item, 'class' => QueuedWorker, 'args' => [])['retry']
     end
 
     it "does not normalize numeric retry's" do
-      assert_equal 2, Sidekiq::Client.send(:normalize_item, 'class' => CWorker, 'args' => [])['retry']
+      assert_equal 2, Sidekiq::Client.new.send(:normalize_item, 'class' => CWorker, 'args' => [])['retry']
     end
   end
 end

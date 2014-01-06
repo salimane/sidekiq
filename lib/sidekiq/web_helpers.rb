@@ -16,6 +16,10 @@ module Sidekiq
       end
     end
 
+    # This is a hook for a Sidekiq Pro feature.  Please don't touch.
+    def filtering(*)
+    end
+
     def locale
       lang = (request.env["HTTP_ACCEPT_LANGUAGE"] || 'en')[0,2]
       strings[lang] ? lang : 'en'
@@ -77,6 +81,10 @@ module Sidekiq
       Sidekiq.redis { |conn| conn.client.location }
     end
 
+    def redis_connection
+      Sidekiq.redis { |conn| conn.client.id }
+    end
+
     def namespace
       @@ns ||= Sidekiq.redis {|conn| conn.respond_to?(:namespace) ? conn.namespace : nil }
     end
@@ -106,6 +114,16 @@ module Sidekiq
       [score.to_f, jid]
     end
 
+    SAFE_QPARAMS = %w(page poll)
+
+    # Merge options with current params, filter safe params, and stringify to query string
+    def qparams(options)
+      options = options.stringify_keys
+      params.merge(options).map { |key, value|
+        SAFE_QPARAMS.include?(key) ? "#{key}=#{value}" : next
+      }.join("&")
+    end
+
     def truncate(text, truncate_after_chars = 2000)
       truncate_after_chars && text.size > truncate_after_chars ? "#{text[0..truncate_after_chars]}..." : text
     end
@@ -113,7 +131,7 @@ module Sidekiq
     def display_args(args, truncate_after_chars = 2000)
       args.map do |arg|
         a = arg.inspect
-        truncate(a)
+        h(truncate(a))
       end.join(", ")
     end
 
@@ -145,7 +163,11 @@ module Sidekiq
     end
 
     def h(text)
-      ERB::Util.h(text)
+      ::Rack::Utils.escape_html(text)
+    rescue ArgumentError => e
+      raise unless e.message.eql?('invalid byte sequence in UTF-8')
+      text.encode!('UTF-16', 'UTF-8', invalid: :replace, replace: '').encode!('UTF-8', 'UTF-16')
+      retry
     end
 
     # Any paginated list that performs an action needs to redirect
